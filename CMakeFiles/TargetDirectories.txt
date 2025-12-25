@@ -1,0 +1,3 @@
+D:/ws/CSVEditor/CMakeFiles/CSVEditor.dir
+D:/ws/CSVEditor/CMakeFiles/ALL_BUILD.dir
+D:/ws/CSVEditor/CMakeFiles/ZERO_CHECK.dir
