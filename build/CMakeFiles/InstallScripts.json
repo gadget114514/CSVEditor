@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"C:/ws/CSVEditor/build/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

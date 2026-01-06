@@ -1,5 +1,5 @@
-D:\ws\CSVEditor\src\test_main.cpp;D:\ws\CSVEditor\build\CSVEditorTests.dir\Release\test_main.obj
-D:\ws\CSVEditor\src\MemoryMappedFile.cpp;D:\ws\CSVEditor\build\CSVEditorTests.dir\Release\MemoryMappedFile.obj
-D:\ws\CSVEditor\src\PieceTable.cpp;D:\ws\CSVEditor\build\CSVEditorTests.dir\Release\PieceTable.obj
-D:\ws\CSVEditor\src\CsvDocument.cpp;D:\ws\CSVEditor\build\CSVEditorTests.dir\Release\CsvDocument.obj
-D:\ws\CSVEditor\src\Localization.cpp;D:\ws\CSVEditor\build\CSVEditorTests.dir\Release\Localization.obj
+C:\ws\CSVEditor\src\test_main.cpp;C:\ws\CSVEditor\build\CSVEditorTests.dir\Release\test_main.obj
+C:\ws\CSVEditor\src\MemoryMappedFile.cpp;C:\ws\CSVEditor\build\CSVEditorTests.dir\Release\MemoryMappedFile.obj
+C:\ws\CSVEditor\src\PieceTable.cpp;C:\ws\CSVEditor\build\CSVEditorTests.dir\Release\PieceTable.obj
+C:\ws\CSVEditor\src\CsvDocument.cpp;C:\ws\CSVEditor\build\CSVEditorTests.dir\Release\CsvDocument.obj
+C:\ws\CSVEditor\src\Localization.cpp;C:\ws\CSVEditor\build\CSVEditorTests.dir\Release\Localization.obj

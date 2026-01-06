@@ -2,16 +2,16 @@
 <Project>
   <ProjectOutputs>
     <ProjectOutput>
-      <FullPath>D:\ws\CSVEditor\build\x64\Release\ZERO_CHECK</FullPath>
+      <FullPath>C:\ws\CSVEditor\build\x64\Release\ZERO_CHECK</FullPath>
     </ProjectOutput>
     <ProjectOutput>
-      <FullPath>D:\ws\CSVEditor\build\Release\CSVEditor.exe</FullPath>
+      <FullPath>C:\ws\CSVEditor\build\Release\CSVEditor.exe</FullPath>
     </ProjectOutput>
     <ProjectOutput>
-      <FullPath>D:\ws\CSVEditor\build\Release\CSVEditorTests.exe</FullPath>
+      <FullPath>C:\ws\CSVEditor\build\Release\CSVEditorTests.exe</FullPath>
     </ProjectOutput>
     <ProjectOutput>
-      <FullPath>D:\ws\CSVEditor\build\x64\Release\ALL_BUILD</FullPath>
+      <FullPath>C:\ws\CSVEditor\build\x64\Release\ALL_BUILD</FullPath>
     </ProjectOutput>
   </ProjectOutputs>
   <ContentFiles />

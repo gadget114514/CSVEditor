@@ -1,4 +1,4 @@
-D:/ws/CSVEditor/build/CMakeFiles/CSVEditor.dir
-D:/ws/CSVEditor/build/CMakeFiles/CSVEditorTests.dir
-D:/ws/CSVEditor/build/CMakeFiles/ALL_BUILD.dir
-D:/ws/CSVEditor/build/CMakeFiles/ZERO_CHECK.dir
+C:/ws/CSVEditor/build/CMakeFiles/CSVEditor.dir
+C:/ws/CSVEditor/build/CMakeFiles/CSVEditorTests.dir
+C:/ws/CSVEditor/build/CMakeFiles/ALL_BUILD.dir
+C:/ws/CSVEditor/build/CMakeFiles/ZERO_CHECK.dir

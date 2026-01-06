@@ -18,6 +18,7 @@ add_executable(CSVEditor WIN32
     src/EditorState.cpp
     src/Localization.cpp
     src/ConfigManager.cpp
+    src/CSVEditor.rc
 )
 
 # Link standard Windows libraries and DirectWrite (as requested for high quality rendering)

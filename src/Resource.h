@@ -1,6 +1,10 @@
 #pragma once
 
 #define IDM_FILE_OPEN    1001
+
+#define IDI_APP_ICON     101
+
+#define IDI_APP_ICON     101
 #define IDM_FILE_REOPEN  1002
 #define IDM_FILE_IMPORT  1008
 #define IDM_FILE_SAVE    1003

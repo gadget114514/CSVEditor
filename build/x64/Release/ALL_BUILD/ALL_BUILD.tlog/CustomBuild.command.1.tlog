@@ -1,6 +1,6 @@
-^D:\WS\CSVEDITOR\CMAKELISTS.TXT
+^C:\WS\CSVEDITOR\CMAKELISTS.TXT
 setlocal
-"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -SD:/ws/CSVEditor -BD:/ws/CSVEditor/build --check-stamp-file D:/ws/CSVEditor/build/CMakeFiles/generate.stamp
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/ws/CSVEditor -BC:/ws/CSVEditor/build --check-stamp-file C:/ws/CSVEditor/build/CMakeFiles/generate.stamp
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
