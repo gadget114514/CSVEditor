@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vector>
+#include <map>
 #include <cstdint>
 
 struct CellPos {
@@ -50,6 +51,11 @@ public:
     float GetScrollX() const { return m_scrollX; }
     void SetScrollX(float x) { m_scrollX = x; }
 
+    // Column Widths
+    float GetColumnWidth(size_t col) const;
+    void SetColumnWidth(size_t col, float width);
+    float GetDefaultColumnWidth() const { return m_defaultColWidth; }
+
 private:
     std::vector<SelectionRange> m_selections;
     SelectionMode m_currentMode = SelectionMode::None;
@@ -57,4 +63,8 @@ private:
 
     size_t m_scrollRow = 0;
     float m_scrollX = 0.0f;
+
+    // Layout
+    std::map<size_t, float> m_colWidths;
+    float m_defaultColWidth = 100.0f;
 };

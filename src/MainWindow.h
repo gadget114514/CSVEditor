@@ -62,19 +62,46 @@ protected:
     void OnHScroll(WPARAM wParam);
 
 private:
+    // Helpers to hit test
+    bool HitTest(int x, int y, size_t& outRow, size_t& outCol, bool& outIsRowHeader, bool& outIsColHeader);
+
+    // Tab Management
+    struct DocumentTab {
+        CsvDocument document;
+        EditorState state;
+        std::wstring filePath; // Empty if new
+        std::wstring title;    // Filename or "Untitled"
+    };
+    
+    std::vector<DocumentTab> m_tabs;
+    size_t m_activeTabIndex = 0;
+    
+    DocumentTab& GetActiveTab();
+    const DocumentTab& GetActiveTab() const;
+    void AddTab(const std::wstring& filePath, bool setActive = true);
+    void CloseTab(size_t index);
+    void SetActiveTab(size_t index);
+    
+    // UI Layout - Tab Bar
+    float m_tabBarHeight = 25.0f;
+    void DrawTabBar(HDC hdc, RECT clientRect);
+    int HitTestTabBar(int x, int y); // Returns tab index or -1
+
+private:
     void UpdateScrollBars();
-    std::wstring m_currentFilePath;
+    std::wstring m_currentFilePath; // Deprecated, use GetActiveTab().filePath
     HWND m_hwnd;
     DirectXResources m_dxResources;
-    CsvDocument m_document;
-    EditorState m_state;
+    // CsvDocument m_document; // Moved to tabs
+    // EditorState m_state;    // Moved to tabs
     
     // UI Layout
     float m_rowHeight = 20.0f;
-    float m_colWidth = 100.0f;
-    float m_headerWidth = 50.0f; // Row headers
+    // float m_colWidth = 100.0f; // Unused?
+    // float m_headerWidth = 50.0f; // Row headers
     float m_headerHeight = 25.0f; // Col headers
-    
+    float m_headerWidth = 50.0f; 
+
     // Editors
     HWND m_hEdit = NULL;
     bool m_isEditing = false;
@@ -123,9 +150,10 @@ private:
     float m_resizeStartX = 0.0f;
     float m_resizeStartWidth = 0.0f;
     
-    std::map<size_t, float> m_colWidths; // Custom widths
-    float m_defaultColWidth = 100.0f;
+    // std::map<size_t, float> m_colWidths; // Moved to EditorState
+    // float m_defaultColWidth = 100.0f;    // Moved to EditorState
     int m_maxCellLines = 1; // Folding value (1 = no wrap)
+    
     float GetColumnWidth(size_t col) const;
     float GetColumnX(size_t col) const; // Absolute X position
     size_t GetColumnAtX(float x) const;
@@ -134,6 +162,4 @@ private:
     HCURSOR m_hCursorArrow = NULL;
     HCURSOR m_hCursorWE = NULL; // Resize
     
-    // Helpers to hit test
-    bool HitTest(int x, int y, size_t& outRow, size_t& outCol, bool& outIsRowHeader, bool& outIsColHeader);
 };

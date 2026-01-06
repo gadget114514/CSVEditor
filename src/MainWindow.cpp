@@ -10,10 +10,76 @@
 
 MainWindow::MainWindow() : m_hwnd(NULL)
 {
+    AddTab(L""); // Default empty tab
 }
 
 MainWindow::~MainWindow()
 {
+}
+
+MainWindow::DocumentTab& MainWindow::GetActiveTab() {
+    if (m_tabs.empty()) {
+        static DocumentTab empty;
+        return empty; 
+    }
+    if (m_activeTabIndex >= m_tabs.size()) m_activeTabIndex = 0;
+    return m_tabs[m_activeTabIndex];
+}
+
+const MainWindow::DocumentTab& MainWindow::GetActiveTab() const {
+    if (m_tabs.empty()) {
+        static DocumentTab empty;
+        return empty;
+    }
+    auto index = m_activeTabIndex;
+    if (index >= m_tabs.size()) index = 0;
+    return m_tabs[index];
+}
+
+void MainWindow::AddTab(const std::wstring& filePath, bool setActive) {
+    DocumentTab tab;
+    tab.filePath = filePath;
+    tab.title = filePath.empty() ? L"Untitled" : filePath.substr(filePath.find_last_of(L"\\/") + 1);
+    
+    // Initialize default column width in state?
+    // tab.state.SetDefaultColWidth(m_defaultColWidth); // If needed
+    
+    m_tabs.push_back(tab); // removed std::move for simpler copy, struct is copyable
+    
+    if (setActive) {
+        SetActiveTab(m_tabs.size() - 1);
+    }
+    if (m_hwnd) InvalidateRect(m_hwnd, NULL, FALSE);
+}
+
+void MainWindow::CloseTab(size_t index) {
+    if (index >= m_tabs.size()) return;
+    
+    m_tabs.erase(m_tabs.begin() + index);
+    
+    if (m_tabs.empty()) {
+        AddTab(L""); // Ensure always one tab
+    }
+    
+    if (m_activeTabIndex >= m_tabs.size()) {
+        m_activeTabIndex = m_tabs.size() - 1;
+    }
+    
+    if (m_hwnd) {
+        SetActiveTab(m_activeTabIndex); // Update UI
+    }
+}
+
+void MainWindow::SetActiveTab(size_t index) {
+    if (index < m_tabs.size()) {
+        m_activeTabIndex = index;
+        if (m_hwnd) {
+            UpdateScrollBars();
+            // UpdateFormulaBar(); // TODO: Add this method to update UI from Model
+            SetWindowText(m_hwnd, GetActiveTab().filePath.empty() ? L"CSV Editor - Untitled" : (L"CSV Editor - " + GetActiveTab().filePath).c_str());
+            InvalidateRect(m_hwnd, NULL, FALSE);
+        }
+    }
 }
 
 bool MainWindow::Create(HINSTANCE hInstance, int nCmdShow)
@@ -30,10 +96,8 @@ bool MainWindow::Create(HINSTANCE hInstance, int nCmdShow)
 
     // Load Config
     m_rowHeight = ConfigManager::Instance().GetFloat(L"Layout", L"RowHeight", 20.0f);
-    m_defaultColWidth = ConfigManager::Instance().GetFloat(L"Layout", L"DefaultColWidth", 100.0f);
+    // m_defaultColWidth handled in GetColumnWidth or state init
     m_maxCellLines = ConfigManager::Instance().GetInt(L"Layout", L"MaxCellLines", 1);
-    // Apply m_maxCellLines to row height if desired?
-    // For now independent.
 
     m_hwnd = CreateWindow(
         _T("CSVEditorWindow"),
@@ -105,13 +169,32 @@ bool MainWindow::Create(HINSTANCE hInstance, int nCmdShow)
 
 bool MainWindow::OpenFile(const std::wstring& filePath)
 {
-    if (m_document.Load(filePath)) {
-        m_currentFilePath = filePath;
-        SetWindowText(m_hwnd, filePath.c_str());
-        m_state.SetScrollRow(0);
+    // Reuse current tab if empty/untitled, otherwise add new
+    bool reuse = false;
+    DocumentTab& current = GetActiveTab();
+    if (current.filePath.empty() && current.document.GetRowCount() <= 0) { // Check <= 0 just safely, usually 0
+        reuse = true;
+    }
+    
+    if (!reuse) {
+        AddTab(L"", true);
+    }
+    
+    DocumentTab& tab = GetActiveTab();
+    if (tab.document.Load(filePath)) {
+        tab.filePath = filePath;
+        tab.title = filePath.empty() ? L"Untitled" : filePath.substr(filePath.find_last_of(L"\\/") + 1);
+        tab.state.SetScrollRow(0);
+        
+        // m_currentFilePath = filePath; // Deprecated
+        SetWindowText(m_hwnd, (L"CSV Editor - " + filePath).c_str());
         UpdateScrollBars();
         InvalidateRect(m_hwnd, NULL, FALSE);
         return true;
+    } else {
+        if (!reuse) {
+            CloseTab(m_activeTabIndex); // Close the failed new tab
+        }
     }
     return false;
 }
@@ -190,14 +273,15 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
              // Navigation
             bool shift = (GetKeyState(VK_SHIFT) & 0x8000);
             size_t r = 0, c = 0;
-            auto sels = m_state.GetSelections();
+            DocumentTab& tab = GetActiveTab();
+            auto sels = tab.state.GetSelections();
             if(!sels.empty()) { r = sels[0].start.row; c = sels[0].start.col; }
             
             bool changed = false;
             if (wParam == VK_UP) {
                 if(r > 0) { r--; changed = true; }
             } else if (wParam == VK_DOWN) {
-                if(r + 1 < m_document.GetRowCount()) { r++; changed = true; }
+                if(r + 1 < tab.document.GetRowCount()) { r++; changed = true; }
             } else if (wParam == VK_LEFT) {
                 if(c > 0) { c--; changed = true; }
             } else if (wParam == VK_RIGHT) {
@@ -205,8 +289,8 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
             }
             
             if (changed) {
-                if (shift) m_state.DragTo(r, c);
-                else m_state.SelectCell(r, c, false);
+                if (shift) tab.state.DragTo(r, c);
+                else tab.state.SelectCell(r, c, false);
                 
                 UpdateFormulaBar();
                 InvalidateRect(hwnd, NULL, FALSE);
@@ -236,7 +320,7 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
     case WM_DESTROY:
         ConfigManager::Instance().SetFloat(L"Layout", L"RowHeight", m_rowHeight);
-        ConfigManager::Instance().SetFloat(L"Layout", L"DefaultColWidth", m_defaultColWidth);
+        ConfigManager::Instance().SetFloat(L"Layout", L"DefaultColWidth", GetActiveTab().state.GetDefaultColumnWidth());
         ConfigManager::Instance().SetInt(L"Layout", L"MaxCellLines", m_maxCellLines);
         ConfigManager::Instance().Save(); // Implicit in Set, but good for clarity if we had batching
         PostQuitMessage(0);
@@ -351,11 +435,12 @@ void MainWindow::OnCommand(HWND hwnd, int id, HWND hwndCtl, UINT codeNotify)
             GetWindowText(m_hFormulaEdit, &text[0], len+1);
             text.resize(len);
             
-            auto selections = m_state.GetSelections();
+            DocumentTab& tab = GetActiveTab();
+            auto selections = tab.state.GetSelections();
             if (!selections.empty()) {
                 size_t r = selections[0].start.row;
                 size_t c = selections[0].start.col;
-                m_document.UpdateCell(r, c, text);
+                tab.document.UpdateCell(r, c, text);
                 InvalidateRect(m_hwnd, NULL, FALSE);
             }
         }
@@ -396,9 +481,10 @@ void MainWindow::OnCommand(HWND hwnd, int id, HWND hwndCtl, UINT codeNotify)
         {
             WaitCursor wait;
             size_t row = 0;
-            const auto& selections = m_state.GetSelections();
+            DocumentTab& tab = GetActiveTab();
+            const auto& selections = tab.state.GetSelections();
             if (!selections.empty()) row = selections[0].start.row;
-            m_document.InsertRow(row, {});
+            tab.document.InsertRow(row, {});
             InvalidateRect(m_hwnd, NULL, FALSE);
             UpdateScrollBars();
         }
@@ -407,10 +493,11 @@ void MainWindow::OnCommand(HWND hwnd, int id, HWND hwndCtl, UINT codeNotify)
         {
             WaitCursor wait;
             size_t row = 0;
-            const auto& selections = m_state.GetSelections();
+            DocumentTab& tab = GetActiveTab();
+            const auto& selections = tab.state.GetSelections();
             if (!selections.empty()) row = selections[0].start.row + 1;
-            else row = m_document.GetRowCount();
-            m_document.InsertRow(row, {});
+            else row = tab.document.GetRowCount();
+            tab.document.InsertRow(row, {});
             InvalidateRect(m_hwnd, NULL, FALSE);
             UpdateScrollBars();
         }
@@ -419,9 +506,10 @@ void MainWindow::OnCommand(HWND hwnd, int id, HWND hwndCtl, UINT codeNotify)
         {
             WaitCursor wait;
             size_t col = 0;
-            const auto& selections = m_state.GetSelections();
+            DocumentTab& tab = GetActiveTab();
+            const auto& selections = tab.state.GetSelections();
             if (!selections.empty()) col = selections[0].start.col;
-            m_document.InsertColumn(col, L"");
+            tab.document.InsertColumn(col, L"");
             InvalidateRect(m_hwnd, NULL, FALSE);
             UpdateScrollBars();
         }
@@ -430,36 +518,38 @@ void MainWindow::OnCommand(HWND hwnd, int id, HWND hwndCtl, UINT codeNotify)
         {
             WaitCursor wait;
             size_t col = 0;
-            const auto& selections = m_state.GetSelections();
+            DocumentTab& tab = GetActiveTab();
+            const auto& selections = tab.state.GetSelections();
             if (!selections.empty()) col = selections[0].start.col + 1;
-            else col = 1; // Default? Or 0?
-             // Actually if empty selection, cannot determine right of what.
-             // Default to appending? Or just 0?
-             // If empty, start.col is 0 usually?
-             // Let's assume 0 if empty.
+            else col = 1; 
             if (selections.empty()) col = 0; 
             
-            // Wait, "Right" of selection means index + 1.
-            m_document.InsertColumn(col, L"");
+            tab.document.InsertColumn(col, L"");
             InvalidateRect(m_hwnd, NULL, FALSE);
             UpdateScrollBars();
         }
         break;
         
     case IDM_EDIT_UNDO:
-        if (m_document.CanUndo()) {
-            WaitCursor wait;
-            m_document.Undo();
-            UpdateScrollBars();
-            InvalidateRect(m_hwnd, NULL, FALSE);
+        {
+            DocumentTab& tab = GetActiveTab();
+            if (tab.document.CanUndo()) {
+                WaitCursor wait;
+                tab.document.Undo();
+                UpdateScrollBars();
+                InvalidateRect(m_hwnd, NULL, FALSE);
+            }
         }
         break;
     case IDM_EDIT_REDO:
-        if (m_document.CanRedo()) {
-            WaitCursor wait;
-            m_document.Redo();
-            UpdateScrollBars();
-            InvalidateRect(m_hwnd, NULL, FALSE);
+        {
+            DocumentTab& tab = GetActiveTab();
+            if (tab.document.CanRedo()) {
+                WaitCursor wait;
+                tab.document.Redo();
+                UpdateScrollBars();
+                InvalidateRect(m_hwnd, NULL, FALSE);
+            }
         }
         break;
         
@@ -494,12 +584,12 @@ void MainWindow::OnCommand(HWND hwnd, int id, HWND hwndCtl, UINT codeNotify)
     case ID_REPLACE_ALL_BTN:
         OnReplaceAll();
         break;
-    case IDM_CONFIG_DELIM_COMMA: m_document.SetDelimiter(L','); m_document.RebuildRowIndex(); InvalidateRect(m_hwnd, NULL, FALSE); break;
-    case IDM_CONFIG_DELIM_TAB:   m_document.SetDelimiter(L'\t'); m_document.RebuildRowIndex(); InvalidateRect(m_hwnd, NULL, FALSE); break;
-    case IDM_CONFIG_DELIM_SEMI:  m_document.SetDelimiter(L';'); m_document.RebuildRowIndex(); InvalidateRect(m_hwnd, NULL, FALSE); break;
-    case IDM_CONFIG_DELIM_PIPE:  m_document.SetDelimiter(L'|'); m_document.RebuildRowIndex(); InvalidateRect(m_hwnd, NULL, FALSE); break;
+    case IDM_CONFIG_DELIM_COMMA: { DocumentTab& tab = GetActiveTab(); tab.document.SetDelimiter(L','); tab.document.RebuildRowIndex(); InvalidateRect(m_hwnd, NULL, FALSE); } break;
+    case IDM_CONFIG_DELIM_TAB:   { DocumentTab& tab = GetActiveTab(); tab.document.SetDelimiter(L'\t'); tab.document.RebuildRowIndex(); InvalidateRect(m_hwnd, NULL, FALSE); } break;
+    case IDM_CONFIG_DELIM_SEMI:  { DocumentTab& tab = GetActiveTab(); tab.document.SetDelimiter(L';'); tab.document.RebuildRowIndex(); InvalidateRect(m_hwnd, NULL, FALSE); } break;
+    case IDM_CONFIG_DELIM_PIPE:  { DocumentTab& tab = GetActiveTab(); tab.document.SetDelimiter(L'|'); tab.document.RebuildRowIndex(); InvalidateRect(m_hwnd, NULL, FALSE); } break;
 
-    case IDM_CONFIG_ENC_UTF8:    m_document.SetEncoding(FileEncoding::UTF8); break;
+    case IDM_CONFIG_ENC_UTF8:    GetActiveTab().document.SetEncoding(FileEncoding::UTF8); break;
     
     case IDM_CONFIG_NL_CRLF:     /* m_document.SetNewline(L"\r\n"); */ break;
     case IDM_CONFIG_NL_LF:       /* m_document.SetNewline(L"\n"); */ break;
@@ -569,14 +659,11 @@ void MainWindow::OnFileOpen()
 
 void MainWindow::OnFileSave()
 {
-    // If we have a current file path, save to it.
-    // If not (new file), call SaveAs.
-    // Currently OpenFile sets m_document internal path? No, CsvDocument doesn't store path publicly?
-    // MainWindow should track current file path.
-    // For now, I'll rely on a member variable I need to add to MainWindow: m_currentFilePath.
-    if (!m_currentFilePath.empty()) {
+    // Use current tab path
+    DocumentTab& tab = GetActiveTab();
+    if (!tab.filePath.empty()) {
         WaitCursor wait;
-        if (m_document.Save(m_currentFilePath)) {
+        if (tab.document.Save(tab.filePath)) {
             MessageBox(m_hwnd, Localization::GetString(StringId::Msg_SaveSuccess), Localization::GetString(StringId::Msg_Info), MB_OK);
         } else {
             MessageBox(m_hwnd, Localization::GetString(StringId::Msg_SaveFailed), Localization::GetString(StringId::Msg_Error), MB_ICONERROR);
@@ -606,16 +693,30 @@ void MainWindow::OnFileSaveAs()
     append(Localization::GetString(StringId::File_Filter_All)); append(_T("*.*"));
     filter.push_back('\0');
 
-    ofn.lpstrFilter = filter.data();
-    ofn.nFilterIndex = 1;
+    ofn.lpstrFileTitle = NULL;
+    ofn.nMaxFileTitle = 0;
+    
+    // Default to 'doc' folder if current path is empty
+    TCHAR curDir[MAX_PATH];
+    GetCurrentDirectory(MAX_PATH, curDir);
+    std::wstring docDir = std::wstring(curDir) + L"\\doc";
+    
+    if (m_currentFilePath.empty() && GetFileAttributes(docDir.c_str()) != INVALID_FILE_ATTRIBUTES) {
+         ofn.lpstrInitialDir = docDir.c_str();
+    } else {
+         ofn.lpstrInitialDir = NULL;
+    }
+
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
 
     if (GetSaveFileName(&ofn) == TRUE) {
         WaitCursor wait;
-        if (m_document.Save(szFile)) {
-            m_currentFilePath = szFile;
+        DocumentTab& tab = GetActiveTab();
+        if (tab.document.Save(szFile)) {
+            tab.filePath = szFile;
+            tab.title = tab.filePath.empty() ? L"Untitled" : tab.filePath.substr(tab.filePath.find_last_of(L"\\/") + 1);
             // Update title
-            SetWindowText(m_hwnd, szFile);
+            SetWindowText(m_hwnd, (L"CSV Editor - " + tab.filePath).c_str());
         } else {
             MessageBox(m_hwnd, Localization::GetString(StringId::Msg_SaveFailed), Localization::GetString(StringId::Msg_Error), MB_ICONERROR);
         }
@@ -650,7 +751,7 @@ void MainWindow::OnFileExport(CsvDocument::ExportFormat format)
         // Check if we need to call Localization for success/fail messages?
         // Using existing SaveSuccess/Fail msg is probably fine or generic.
         WaitCursor wait;
-        if (m_document.Export(path, format)) {
+        if (GetActiveTab().document.Export(path, format)) {
              MessageBox(m_hwnd, Localization::GetString(StringId::Msg_SaveSuccess), Localization::GetString(StringId::Msg_Info), MB_OK);
         } else {
              MessageBox(m_hwnd, Localization::GetString(StringId::Msg_SaveFailed), Localization::GetString(StringId::Msg_Error), MB_ICONERROR);
@@ -687,7 +788,7 @@ void MainWindow::OnFileImport()
 
     if (GetOpenFileName(&ofn) == TRUE) {
         WaitCursor wait;
-        if (m_document.Import(szFile)) {
+        if (GetActiveTab().document.Import(szFile)) {
              // Invalidate entire window to refresh grid
              InvalidateRect(m_hwnd, NULL, TRUE);
              UpdateScrollBars(); 
@@ -701,8 +802,8 @@ void MainWindow::OnFileImport()
 void MainWindow::OnEditDelete()
 {
     // Delete selected rows or columns
-    
-    const auto& selections = m_state.GetSelections();
+    DocumentTab& tab = GetActiveTab();
+    const auto& selections = tab.state.GetSelections();
     if (selections.empty()) return;
 
     // Handle multiple selections?
@@ -718,22 +819,20 @@ void MainWindow::OnEditDelete()
         size_t end = (std::max)(range.start.row, range.end.row);
         
         for (size_t i = end; ; --i) {
-            m_document.DeleteRow(i);
+            tab.document.DeleteRow(i);
             if (i == start) break;
         }
-        // m_state.ClearSelection(); // Keep selection? Or clear because rows are gone.
-        // Better clear to avoid invalid indices.
-        m_state.ClearSelection();
+        tab.state.ClearSelection();
         InvalidateRect(m_hwnd, NULL, FALSE);
     } else if (range.mode == SelectionMode::Column) {
         size_t start = (std::min)(range.start.col, range.end.col);
         size_t end = (std::max)(range.start.col, range.end.col);
 
         for (size_t i = end; ; --i) {
-            m_document.DeleteColumn(i);
+            tab.document.DeleteColumn(i);
             if (i == start) break;
         }
-        m_state.ClearSelection();
+        tab.state.ClearSelection();
         InvalidateRect(m_hwnd, NULL, FALSE);
     }
 }
@@ -742,13 +841,14 @@ void MainWindow::OnEditDelete()
 void MainWindow::OnEditInsertColumn()
 {
     // Insert before current selection
-    const auto& selections = m_state.GetSelections();
+    DocumentTab& tab = GetActiveTab();
+    const auto& selections = tab.state.GetSelections();
     size_t col = 0;
     if (!selections.empty()) {
         col = selections[0].start.col;
     }
     
-    m_document.InsertColumn(col, L"");
+    tab.document.InsertColumn(col, L"");
     
     InvalidateRect(m_hwnd, NULL, FALSE);
     UpdateScrollBars();
@@ -757,7 +857,8 @@ void MainWindow::OnEditInsertColumn()
 void MainWindow::OnEditClear()
 {
     // Clear content of selected cells
-    const auto& selections = m_state.GetSelections();
+    DocumentTab& tab = GetActiveTab();
+    const auto& selections = tab.state.GetSelections();
     if (selections.empty()) return;
     
     const auto& range = selections[0];
@@ -769,7 +870,7 @@ void MainWindow::OnEditClear()
     
     for (size_t r = startRow; r <= endRow; ++r) {
         for (size_t c = startCol; c <= endCol; ++c) {
-            m_document.UpdateCell(r, c, L"");
+            tab.document.UpdateCell(r, c, L"");
         }
     }
     
@@ -779,7 +880,8 @@ void MainWindow::OnEditClear()
 
 void MainWindow::OnEditCopy()
 {
-    const auto& selections = m_state.GetSelections();
+    DocumentTab& tab = GetActiveTab();
+    const auto& selections = tab.state.GetSelections();
     if (selections.empty()) return;
     const auto& range = selections[0]; // Multi-selection copy is complex, use primary
     
@@ -795,15 +897,15 @@ void MainWindow::OnEditCopy()
     }
     // If Column selection, handle max row
     else if (range.mode == SelectionMode::Column) {
-         endRow = m_document.GetRowCount() > 0 ? m_document.GetRowCount() - 1 : 0;
+         endRow = tab.document.GetRowCount() > 0 ? tab.document.GetRowCount() - 1 : 0;
     }
     // If All selection
     else if (range.mode == SelectionMode::All) {
-         endRow = m_document.GetRowCount() > 0 ? m_document.GetRowCount() - 1 : 0;
+         endRow = tab.document.GetRowCount() > 0 ? tab.document.GetRowCount() - 1 : 0;
          endCol = 100; // HACK: Max cols
     }
 
-    std::wstring text = m_document.GetRangeAsText(startRow, startCol, endRow, endCol);
+    std::wstring text = tab.document.GetRangeAsText(startRow, startCol, endRow, endCol);
 
     if (OpenClipboard(m_hwnd)) {
         EmptyClipboard();
@@ -821,7 +923,7 @@ void MainWindow::OnEditPaste()
 {
     // Basic Paste: Insert text at start of selection
     // Parsing the pasted CSV/TSV data and inserting into table.
-    CsvDocument pastedDoc;
+    // CsvDocument pastedDoc; // Unused
     
     if (!OpenClipboard(m_hwnd)) return;
     
@@ -836,11 +938,12 @@ void MainWindow::OnEditPaste()
                 std::wstring pasteData = pText;
                 GlobalUnlock(hGlob); // Unlock early as we copied data
                 
-                const auto& selections = m_state.GetSelections();
+                DocumentTab& tab = GetActiveTab();
+                const auto& selections = tab.state.GetSelections();
                 if (!selections.empty()) {
                     size_t r = selections[0].start.row;
                     size_t c = selections[0].start.col;
-                    m_document.PasteCells(r, c, pasteData);
+                    tab.document.PasteCells(r, c, pasteData);
                     InvalidateRect(m_hwnd, NULL, FALSE);
                 }
             }
@@ -856,7 +959,8 @@ void MainWindow::OnEditCut()
     // Excel style: "Cut" mode, then move. 
     // Text Editor style: Copy + Delete.
     // Let's go with Clear for cells, Delete for Row mode.
-    const auto& selections = m_state.GetSelections();
+    DocumentTab& tab = GetActiveTab();
+    const auto& selections = tab.state.GetSelections();
     if (!selections.empty() && selections[0].mode == SelectionMode::Row) {
          OnEditDelete();
     } else {
@@ -866,13 +970,14 @@ void MainWindow::OnEditCut()
 
 void MainWindow::OnEditInsertRow()
 {
-    const auto& selections = m_state.GetSelections();
+    DocumentTab& tab = GetActiveTab();
+    const auto& selections = tab.state.GetSelections();
     size_t insertRow = 0;
     
     if (!selections.empty()) {
         insertRow = selections[0].start.row;
     } else {
-        insertRow = m_document.GetRowCount();
+        insertRow = tab.document.GetRowCount();
     }
     
     // Insert empty row
@@ -880,7 +985,7 @@ void MainWindow::OnEditInsertRow()
     // CsvDocument InsertRow handles empty vector -> just delimiter+newline?
     // Let's insert "" to ensure at least one cell if needed or just newline.
     // Actually InsertRow logic iterates values. If empty, it adds just \n.
-    m_document.InsertRow(insertRow, emptyValues);
+    tab.document.InsertRow(insertRow, emptyValues);
     
     InvalidateRect(m_hwnd, NULL, FALSE);
     UpdateScrollBars();
@@ -894,6 +999,8 @@ void MainWindow::OnExit()
 void MainWindow::UpdateScrollBars()
 {
     if (!m_hwnd) return;
+    
+    DocumentTab& tab = GetActiveTab();
 
     RECT rc;
     GetClientRect(m_hwnd, &rc);
@@ -901,10 +1008,7 @@ void MainWindow::UpdateScrollBars()
     int clientWidth = rc.right - rc.left;
 
     // Vertical Scrollbar
-    // Range: 0 to RowCount
-    // Page: VisibleRows
-    
-    size_t rowCount = m_document.GetRowCount();
+    size_t rowCount = tab.document.GetRowCount();
     int visibleRows = (int)((clientHeight - m_headerHeight) / m_rowHeight);
     if (visibleRows < 0) visibleRows = 0;
 
@@ -912,35 +1016,21 @@ void MainWindow::UpdateScrollBars()
     si.cbSize = sizeof(SCROLLINFO);
     si.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
     si.nMin = 0;
-    si.nMax = (int)rowCount + visibleRows - 1; // +visibleRows to allow scrolling to bottom
-    // Actually standard is nMax. 
-    // If nMax = 100, nPage = 10. Max Pos = 91. 
-    // We want to be able to scroll until the last row is visible. 
-    
-    si.nMax = (int)rowCount - 1; 
-    // If we want "past end" scrolling, increase max.
-    // Let's stick to standard map: Pos 0 = Row 0. Pos Max = Last Row at top? 
-    // Usually we want Last Row at bottom. => Max Pos = RowCount - VisibleRows.
-    // Set nMax = RowCount - 1. nPage = VisibleRows.
-    // The scrollbar logic handles nMax - nPage + 1 automatically.
-    
     si.nMax = (int)rowCount > 0 ? (int)rowCount - 1 : 0;
     si.nPage = visibleRows;
-    si.nPos = (int)m_state.GetScrollRow();
+    si.nPos = (int)tab.state.GetScrollRow();
     
     SetScrollInfo(m_hwnd, SB_VERT, &si, TRUE);
 
     // Horizontal Scrollbar
-    // Range: Pixels
-    float totalWidth = GetColumnX(m_document.GetMaxColumnCount());
+    float totalWidth = GetColumnX(tab.document.GetMaxColumnCount());
     // Ensure at least some width
     if (totalWidth < clientWidth) totalWidth = (float)clientWidth;
 
     si.nMax = (int)totalWidth;
     si.nPage = clientWidth;
-    si.nPos = (int)m_state.GetScrollX();
+    si.nPos = (int)tab.state.GetScrollX();
     
-    SetScrollInfo(m_hwnd, SB_HORZ, &si, TRUE);
     SetScrollInfo(m_hwnd, SB_HORZ, &si, TRUE);
 }
 
@@ -966,10 +1056,9 @@ void MainWindow::OnVScroll(WPARAM wParam)
 
     if (newPos < si.nMin) newPos = si.nMin;
     if (newPos > (int)(si.nMax - si.nPage + 1)) newPos = (si.nMax - si.nPage + 1);
-    // Ensure we don't go negative if page > max
     if (newPos < 0) newPos = 0;
 
-    m_state.SetScrollRow((size_t)newPos);
+    GetActiveTab().state.SetScrollRow((size_t)newPos);
     UpdateScrollBars();
     InvalidateRect(m_hwnd, NULL, FALSE);
 }
@@ -996,25 +1085,24 @@ void MainWindow::OnHScroll(WPARAM wParam)
     if (newPos > (int)(si.nMax - si.nPage + 1)) newPos = (si.nMax - si.nPage + 1);
     if (newPos < 0) newPos = 0;
 
-    m_state.SetScrollX((float)newPos);
+    GetActiveTab().state.SetScrollX((float)newPos);
     UpdateScrollBars();
     InvalidateRect(m_hwnd, NULL, FALSE);
 }
 
 void MainWindow::OnMouseWheel(short delta)
 {
-    // Delta / 120 = clicks. Each click = 3 lines usually.
     int lines = - (delta / WHEEL_DELTA) * 3;
     
-    int currentRow = (int)m_state.GetScrollRow();
+    DocumentTab& tab = GetActiveTab();
+    int currentRow = (int)tab.state.GetScrollRow();
     int newRow = currentRow + lines;
     if (newRow < 0) newRow = 0;
     
-    // Check max
-    size_t rowCount = m_document.GetRowCount();
-    if (newRow >= (int)rowCount) newRow = (int)rowCount - 1; // Basic clamp
+    size_t rowCount = tab.document.GetRowCount();
+    if (newRow >= (int)rowCount) newRow = (int)rowCount - 1; 
     
-    m_state.SetScrollRow((size_t)newRow);
+    tab.state.SetScrollRow((size_t)newRow);
     UpdateScrollBars();
     InvalidateRect(m_hwnd, NULL, FALSE);
 }
@@ -1024,12 +1112,15 @@ bool MainWindow::HitTest(int x, int y, size_t& outRow, size_t& outCol, bool& out
     float fx = (float)x;
     float fy = (float)y;
     
-    // Formula Bar Offset
-    fy -= m_formulaBarHeight;
-    if (fy < 0) return false; // Clicked in formula bar or above
+    // Account for TabBar + FormulaBar
+    fy -= (m_tabBarHeight + m_formulaBarHeight);
+    
+    if (fy < 0) return false; // Clicked in formula/tab or above
 
     outIsRowHeader = false;
     outIsColHeader = false;
+    
+    DocumentTab& tab = GetActiveTab();
 
     // Check Headers
     if (fx < m_headerWidth && fy < m_headerHeight) {
@@ -1045,14 +1136,14 @@ bool MainWindow::HitTest(int x, int y, size_t& outRow, size_t& outCol, bool& out
         float relativeY = fy - m_headerHeight;
         if (relativeY < 0) return false;
         
-        outRow = m_state.GetScrollRow() + (size_t)(relativeY / m_rowHeight);
+        outRow = tab.state.GetScrollRow() + (size_t)(relativeY / m_rowHeight);
         return true;
     }
 
     if (fy < m_headerHeight) {
         outIsColHeader = true;
         // Calculate col
-        float relativeX = fx - m_headerWidth + m_state.GetScrollX(); 
+        float relativeX = fx - m_headerWidth + tab.state.GetScrollX(); 
         
         // Find column index based on cumulative width
 
@@ -1062,9 +1153,9 @@ bool MainWindow::HitTest(int x, int y, size_t& outRow, size_t& outCol, bool& out
 
     // Grid Area
     float relativeY = fy - m_headerHeight;
-    float relativeX = fx - m_headerWidth + m_state.GetScrollX(); 
+    float relativeX = fx - m_headerWidth + tab.state.GetScrollX(); 
     
-    outRow = m_state.GetScrollRow() + (size_t)(relativeY / m_rowHeight);
+    outRow = tab.state.GetScrollRow() + (size_t)(relativeY / m_rowHeight);
     outCol = GetColumnAtX(relativeX);
     
     return true;
@@ -1072,14 +1163,27 @@ bool MainWindow::HitTest(int x, int y, size_t& outRow, size_t& outCol, bool& out
 
 void MainWindow::OnLButtonDown(int x, int y, UINT keyFlags)
 {
+    // Check Tab Bar Click
+    if (y < m_tabBarHeight) {
+        int tabIndex = HitTestTabBar(x, y);
+        if (tabIndex != -1) {
+            if (tabIndex == m_tabs.size()) {
+                AddTab(L"", true); // New Tab
+            } else {
+                SetActiveTab(tabIndex);
+            }
+        }
+        return;
+    }
+
     SetCapture(m_hwnd);
     
     // Check Resize
-    float fy = (float)y - m_formulaBarHeight;
+    float fy = (float)y - (m_formulaBarHeight + m_tabBarHeight);
     bool inHeader = (fy >= 0 && fy < m_headerHeight);
     if (inHeader && x > m_headerWidth) {
         float gridX = (float)x - m_headerWidth;
-        float scrollX = m_state.GetScrollX();
+        float scrollX = GetActiveTab().state.GetScrollX();
         float contentX = gridX + scrollX;
         size_t col = GetColumnAtX(contentX);
         float colRight = GetColumnX(col) + GetColumnWidth(col);
@@ -1098,15 +1202,17 @@ void MainWindow::OnLButtonDown(int x, int y, UINT keyFlags)
     
     if (HitTest(x, y, row, col, isRowHeader, isColHeader)) {
         bool ctrl = (keyFlags & MK_CONTROL); // Logical AND for check usually or GetKeyState
+        
+        DocumentTab& tab = GetActiveTab();
 
         if (isRowHeader && isColHeader) {
-             m_state.SelectAll();
+             tab.state.SelectAll();
         } else if (isRowHeader) {
-            m_state.SelectRow(row, ctrl);
+            tab.state.SelectRow(row, ctrl);
         } else if (isColHeader) {
-            m_state.SelectColumn(col, ctrl);
+            tab.state.SelectColumn(col, ctrl);
         } else {
-            m_state.SelectCell(row, col, ctrl);
+            tab.state.SelectCell(row, col, ctrl);
         }
         
         UpdateFormulaBar();
@@ -1144,7 +1250,7 @@ void MainWindow::OnMouseMove(int x, int y, UINT keyFlags)
         float newW = m_resizeStartWidth + delta;
         if (newW < 20.0f) newW = 20.0f;
         
-        m_colWidths[m_resizingColIndex] = newW;
+        GetActiveTab().state.SetColumnWidth(m_resizingColIndex, newW);
         InvalidateRect(m_hwnd, NULL, FALSE);
         UpdateScrollBars(); // Width changed
         return;
@@ -1153,7 +1259,7 @@ void MainWindow::OnMouseMove(int x, int y, UINT keyFlags)
     // Check for resize cursor
     if (inHeader && x > m_headerWidth) {
         float gridX = (float)x - m_headerWidth;
-        float scrollX = m_state.GetScrollX();
+        float scrollX = GetActiveTab().state.GetScrollX();
         float contentX = gridX + scrollX;
         
         size_t col = GetColumnAtX(contentX);
@@ -1173,7 +1279,7 @@ void MainWindow::OnMouseMove(int x, int y, UINT keyFlags)
         bool isRowHeader, isColHeader;
         
         if (HitTest(x, y, row, col, isRowHeader, isColHeader)) {
-            m_state.DragTo(row, col);
+            GetActiveTab().state.DragTo(row, col);
             InvalidateRect(m_hwnd, NULL, FALSE);
             UpdateFormulaBar();
         }
@@ -1210,15 +1316,16 @@ void MainWindow::OnContextMenu(HWND hwnd, int x, int y)
         // Right click *outside* selection selects that single item.
         
         bool isSelected = false;
-        if (isRowHeader) isSelected = m_state.IsRowSelected(row);
-        else if (isColHeader) isSelected = m_state.IsColumnSelected(col);
-        else isSelected = m_state.IsSelected(row, col);
+        DocumentTab& tab = GetActiveTab();
+        if (isRowHeader) isSelected = tab.state.IsRowSelected(row);
+        else if (isColHeader) isSelected = tab.state.IsColumnSelected(col);
+        else isSelected = tab.state.IsSelected(row, col);
 
         if (!isSelected) {
             // Select it (singlular)
-            if (isRowHeader) m_state.SelectRow(row, false);
-            else if (isColHeader) m_state.SelectColumn(col, false);
-            else m_state.SelectCell(row, col, false);
+            if (isRowHeader) tab.state.SelectRow(row, false);
+            else if (isColHeader) tab.state.SelectColumn(col, false);
+            else tab.state.SelectCell(row, col, false);
             
             InvalidateRect(m_hwnd, NULL, FALSE);
         }
@@ -1252,10 +1359,10 @@ void MainWindow::OnContextMenu(HWND hwnd, int x, int y)
 void MainWindow::OnResize(UINT width, UINT height)
 {
     if (m_hPosLabel) {
-        MoveWindow(m_hPosLabel, 0, 0, 40, (int)m_formulaBarHeight, TRUE);
+        MoveWindow(m_hPosLabel, 0, (int)m_tabBarHeight, 40, (int)m_formulaBarHeight, TRUE);
     }
     if (m_hFormulaEdit) {
-        MoveWindow(m_hFormulaEdit, 40, 0, width - 40, (int)m_formulaBarHeight, TRUE);
+        MoveWindow(m_hFormulaEdit, 40, (int)m_tabBarHeight, width - 40, (int)m_formulaBarHeight, TRUE);
     }
     
     if (m_hProgressBar) {
@@ -1347,12 +1454,16 @@ void MainWindow::ShowCellEditor(size_t row, size_t col)
 
     // Calculate Rect
     // Need to account for scroll
-    size_t scrollRow = m_state.GetScrollRow();
+    DocumentTab& tab = GetActiveTab();
+    size_t scrollRow = tab.state.GetScrollRow();
     
     if (row < scrollRow) return; // Not visible
     
-    float y = m_formulaBarHeight + m_headerHeight + (row - scrollRow) * m_rowHeight;
-    float x = m_headerWidth + GetColumnX(col) - m_state.GetScrollX(); 
+    // Y position needs to account for TabBar + FormulaBar + Header
+    float topOffset = m_tabBarHeight + m_formulaBarHeight + m_headerHeight;
+    
+    float y = topOffset + (row - scrollRow) * m_rowHeight;
+    float x = m_headerWidth + GetColumnX(col) - tab.state.GetScrollX(); 
     float w = GetColumnWidth(col);
     
     RECT rc;
@@ -1363,7 +1474,7 @@ void MainWindow::ShowCellEditor(size_t row, size_t col)
     
     // Get Cell Value
     std::wstring text;
-    auto cells = m_document.GetRowCells(row);
+    auto cells = tab.document.GetRowCells(row);
     if (col < cells.size()) text = cells[col];
     
     m_hEdit = CreateWindowEx(
@@ -1374,10 +1485,6 @@ void MainWindow::ShowCellEditor(size_t row, size_t col)
     );
     
     if (m_hEdit) {
-        // Set Font
-        // SendMessage(m_hEdit, WM_SETFONT, (WPARAM)hFont, TRUE); 
-        // Need to expose font or create simple one. System font for now.
-        
         SetWindowSubclass(m_hEdit, EditSubclassProc, 0, (DWORD_PTR)this);
         SetFocus(m_hEdit);
         SendMessage(m_hEdit, EM_SETSEL, 0, -1); // Select all text
@@ -1396,15 +1503,12 @@ void MainWindow::HideCellEditor(bool save)
         GetWindowText(m_hEdit, &text[0], len + 1);
         text.resize(len); // Remove null terminator
         
-        m_document.UpdateCell(m_editingRow, m_editingCol, text);
+        GetActiveTab().document.UpdateCell(m_editingRow, m_editingCol, text);
     }
 
     m_isEditing = false;
     DestroyWindow(m_hEdit);
     m_hEdit = NULL;
-    
-    // Restore focus to main window logic handled by OS usually but good to ensure
-    // SetFocus(m_hwnd); // Might trigger recursion if called from KillFocus?
     
     InvalidateRect(m_hwnd, NULL, FALSE);
 }
@@ -1512,7 +1616,8 @@ void MainWindow::OnReplace()
     replace.resize(rLen);
 
     // Get Selection
-    auto selections = m_state.GetSelections();
+    DocumentTab& tab = GetActiveTab();
+    auto selections = tab.state.GetSelections();
     size_t r = 0, c = 0;
     if (!selections.empty()) {
         r = selections[0].start.row;
@@ -1528,42 +1633,23 @@ void MainWindow::OnReplace()
     bool replaced = false;
     {
         WaitCursor wait;
-        replaced = m_document.Replace(query, replace, r, c, opts);
+        replaced = tab.document.Replace(query, replace, r, c, opts);
     }
     
     if (replaced) {
-        // Successful replace at r, c.
-        // Move selection? Or just stay?
-        // Usually jump to next.
-        // Let's Search Next from current position + 1?
-        // Actually Search() handles finding next if called again.
-        // But we modified the cell. 
-        // Let's just find next.
-        
-        // Find next *after* this cell?
-        // If we replaced "foo" with "bar", we are still at r,c.
-        // Search should start from r,c?
-        // If "bar" matches "foo", we might loop? "Contains" mode "foo" -> "foofoo" -> loop.
-        // Search takes start pos.
-        // Let's increment c temporarily to skip? 
-        
-        // Actually, just calling Search(..., forward=true) will find *next* match if we assume we are at current match.
-        // But Replace updates the cell.
-        
-        // Let's just update view first.
         InvalidateRect(m_hwnd, NULL, FALSE);
         
         // Find Next
-        if (m_document.Search(query, r, c, opts)) {
-             m_state.SelectCell(r, c, false);
-             m_state.SetScrollRow(r > 5 ? r - 5 : 0);
+        if (tab.document.Search(query, r, c, opts)) {
+             tab.state.SelectCell(r, c, false);
+             tab.state.SetScrollRow(r > 5 ? r - 5 : 0);
              UpdateScrollBars();
         }
     } else {
         // Maybe try to Find first if not currently on match?
-        if (m_document.Search(query, r, c, opts)) {
-             m_state.SelectCell(r, c, false);
-             m_state.SetScrollRow(r > 5 ? r - 5 : 0);
+        if (tab.document.Search(query, r, c, opts)) {
+             tab.state.SelectCell(r, c, false);
+             tab.state.SetScrollRow(r > 5 ? r - 5 : 0);
              UpdateScrollBars();
              // Found it, now user clicks Replace again to replace.
         } else {
@@ -1593,7 +1679,7 @@ void MainWindow::OnReplaceAll()
     int count = 0;
     {
         WaitCursor wait;
-        count = m_document.ReplaceAll(query, replace, opts);
+        count = GetActiveTab().document.ReplaceAll(query, replace, opts);
     }
     
     std::wstring msg = _T("Replaced ") + std::to_wstring(count) + _T(" occurrences.");
@@ -1612,7 +1698,8 @@ void MainWindow::OnSearchNext()
     GetWindowText(m_hSearchEdit, &query[0], len+1);
     query.resize(len);
     
-    auto selections = m_state.GetSelections();
+    DocumentTab& tab = GetActiveTab();
+    auto selections = tab.state.GetSelections();
     size_t r = 0, c = 0;
     if (!selections.empty()) {
         r = selections[0].start.row;
@@ -1627,13 +1714,13 @@ void MainWindow::OnSearchNext()
     bool found = false;
     {
          WaitCursor wait;
-         found = m_document.Search(query, r, c, opts);
+         found = tab.document.Search(query, r, c, opts);
     }
 
     if (found) {
-        m_state.SelectCell(r, c, false);
+        tab.state.SelectCell(r, c, false);
         // Ensure visible
-        m_state.SetScrollRow(r > 5 ? r - 5 : 0); // Center roughly
+        tab.state.SetScrollRow(r > 5 ? r - 5 : 0); // Center roughly
         UpdateScrollBars();
         InvalidateRect(m_hwnd, NULL, FALSE);
     } else {
@@ -1651,7 +1738,8 @@ void MainWindow::OnSearchPrev()
     GetWindowText(m_hSearchEdit, &query[0], len+1);
     query.resize(len);
     
-    auto selections = m_state.GetSelections();
+    DocumentTab& tab = GetActiveTab();
+    auto selections = tab.state.GetSelections();
     size_t r = 0, c = 0;
     if (!selections.empty()) {
         r = selections[0].start.row;
@@ -1666,12 +1754,12 @@ void MainWindow::OnSearchPrev()
     bool found = false;
     {
          WaitCursor wait;
-         found = m_document.Search(query, r, c, opts);
+         found = tab.document.Search(query, r, c, opts);
     }
     
     if (found) {
-        m_state.SelectCell(r, c, false);
-        m_state.SetScrollRow(r > 5 ? r - 5 : 0);
+        tab.state.SelectCell(r, c, false);
+        tab.state.SetScrollRow(r > 5 ? r - 5 : 0);
         UpdateScrollBars();
         InvalidateRect(m_hwnd, NULL, FALSE);
     } else {
@@ -1697,7 +1785,8 @@ void MainWindow::UpdateFormulaBar()
     m_isUpdatingFormula = true;
     
     // Get Active Cell
-    auto selections = m_state.GetSelections();
+    DocumentTab& tab = GetActiveTab();
+    auto selections = tab.state.GetSelections();
     if (selections.empty()) {
         SetWindowText(m_hFormulaEdit, L"");
         if (m_hPosLabel) SetWindowText(m_hPosLabel, L"");
@@ -1732,8 +1821,8 @@ void MainWindow::UpdateFormulaBar()
         SetWindowText(m_hPosLabel, label.c_str());
     }
     
-    if (r < m_document.GetRowCount()) {
-        auto cells = m_document.GetRowCells(r);
+    if (r < tab.document.GetRowCount()) {
+        auto cells = tab.document.GetRowCells(r);
         if (c < cells.size()) {
             SetWindowText(m_hFormulaEdit, cells[c].c_str());
             m_isUpdatingFormula = false;
@@ -1753,7 +1842,7 @@ void MainWindow::OnPaint(HWND hwnd)
     auto pTF = m_dxResources.GetTextFormat();
 
     pRT->BeginDraw();
-    pRT->Clear(D2D1::ColorF(D2D1::ColorF::White));
+    pRT->Clear(D2D1::ColorF(D2D1::ColorF::LightGray)); // background for tab bar
 
     CComPtr<ID2D1SolidColorBrush> pBrushBlack;
     pRT->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::Black), &pBrushBlack);
@@ -1762,23 +1851,60 @@ void MainWindow::OnPaint(HWND hwnd)
     pRT->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::LightGray), &pBrushGrid);
 
     CComPtr<ID2D1SolidColorBrush> pBrushSel;
-    pRT->CreateSolidColorBrush(D2D1::ColorF(0.2f, 0.6f, 1.0f, 0.3f), &pBrushSel); // Translucent Blue
+    pRT->CreateSolidColorBrush(D2D1::ColorF(0.2f, 0.6f, 1.0f, 0.3f), &pBrushSel); 
     
     CComPtr<ID2D1SolidColorBrush> pBrushHeader;
     pRT->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::WhiteSmoke), &pBrushHeader);
+    
+    CComPtr<ID2D1SolidColorBrush> pBrushTabActive;
+    pRT->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), &pBrushTabActive);
+    
+    CComPtr<ID2D1SolidColorBrush> pBrushTabInactive;
+    pRT->CreateSolidColorBrush(D2D1::ColorF(0.9f, 0.9f, 0.9f), &pBrushTabInactive);
 
     if (pBrushBlack && pBrushGrid && pTF) {
         D2D1_SIZE_F size = pRT->GetSize();
         
-        // Formula Bar Offset
-        float gridY = m_formulaBarHeight; 
+        // Draw Tabs
+        float tabX = 0;
+        float tabW = 120.0f;
+        float tabH = m_tabBarHeight; // 25.0f
         
-        size_t rowCount = m_document.GetRowCount();
+        for (size_t i = 0; i < m_tabs.size(); ++i) {
+            D2D1_RECT_F tabRect = D2D1::RectF(tabX, 0, tabX + tabW, tabH);
+            
+            pRT->FillRectangle(tabRect, (i == m_activeTabIndex) ? pBrushTabActive : pBrushTabInactive);
+            pRT->DrawRectangle(tabRect, pBrushGrid);
+            
+            std::wstring title = m_tabs[i].title;
+            D2D1_RECT_F textRect = D2D1::RectF(tabX + 5, 5, tabX + tabW - 5, tabH - 5);
+            
+            // Allow clipping
+            pRT->PushAxisAlignedClip(textRect, D2D1_ANTIALIAS_MODE_ALIASED);
+            pRT->DrawText(title.c_str(), (UINT32)title.length(), pTF, textRect, pBrushBlack);
+            pRT->PopAxisAlignedClip();
+            
+            tabX += tabW;
+        }
+        
+        // New Tab Button [+]
+        D2D1_RECT_F newTabRect = D2D1::RectF(tabX, 0, tabX + 30, tabH);
+        pRT->FillRectangle(newTabRect, pBrushTabInactive);
+        pRT->DrawRectangle(newTabRect, pBrushGrid);
+        pRT->DrawText(L"+", 1, pTF, D2D1::RectF(tabX + 10, 2, tabX + 25, 20), pBrushBlack);
+
+
+        // Formula Bar Offset
+        float gridY = m_formulaBarHeight + m_tabBarHeight; 
+        
+        size_t rowCount = GetActiveTab().document.GetRowCount();
+        
         size_t visibleRows = (size_t)((size.height - m_headerHeight - gridY) / m_rowHeight) + 2;
         
         float startY = m_headerHeight + gridY;
         
-        size_t startRow = m_state.GetScrollRow();
+        // Update Scroll Access
+        size_t startRow = GetActiveTab().state.GetScrollRow();
 
         // Draw Row Headers
         // Match valid rows
@@ -1786,8 +1912,11 @@ void MainWindow::OnPaint(HWND hwnd)
         // For simplicity: Iterate same rows as grid
         
         // Draw Grid and Selection
+        auto& activeDoc = GetActiveTab().document;
+        const auto& activeState = GetActiveTab().state;
+        
         for (size_t i = startRow; i < rowCount && i < startRow + visibleRows; ++i) {
-            std::vector<std::wstring> cells = m_document.GetRowCells(i);
+            std::vector<std::wstring> cells = activeDoc.GetRowCells(i);
             float y = startY + (i - startRow) * m_rowHeight;
             
             // Draw Row Header
@@ -1799,7 +1928,7 @@ void MainWindow::OnPaint(HWND hwnd)
             std::wstring rowNum = std::to_wstring(i + 1);
             pRT->DrawText(rowNum.c_str(), (UINT32)rowNum.length(), pTF, headerRect, pBrushBlack);
 
-            float scrollX = m_state.GetScrollX();
+            float scrollX = activeState.GetScrollX();
             size_t startCol = GetColumnAtX(scrollX);
             
             float x = m_headerWidth + GetColumnX(startCol) - scrollX;
@@ -1813,7 +1942,7 @@ void MainWindow::OnPaint(HWND hwnd)
                 D2D1_RECT_F cellRect = D2D1::RectF(x, y, x + colW, y + m_rowHeight);
                 
                 // Selection
-                if (m_state.IsSelected(i, col)) {
+                if (activeState.IsSelected(i, col)) {
                     pRT->FillRectangle(cellRect, pBrushSel);
                 }
 
@@ -1850,7 +1979,7 @@ void MainWindow::OnPaint(HWND hwnd)
         }
         
         // Draw Column Headers
-        float scrollX = m_state.GetScrollX();
+        float scrollX = GetActiveTab().state.GetScrollX();
         size_t startCol = GetColumnAtX(scrollX);
         float hx = m_headerWidth + GetColumnX(startCol) - scrollX;
         
@@ -1881,7 +2010,7 @@ void MainWindow::OnPaint(HWND hwnd)
              c++;
              
              // Safety cap
-             if (c > m_document.GetMaxColumnCount() + 100) break; 
+             if (c > activeDoc.GetMaxColumnCount() + 100) break; 
         }
 
         // Corner Header
@@ -1898,20 +2027,17 @@ void MainWindow::OnPaint(HWND hwnd)
 }
 float MainWindow::GetColumnWidth(size_t col) const
 {
-    auto it = m_colWidths.find(col);
-    if (it != m_colWidths.end()) return it->second;
-    return m_defaultColWidth;
+    return GetActiveTab().state.GetColumnWidth(col);
 }
 
 float MainWindow::GetColumnX(size_t col) const
 {
     float x = 0;
-    if (m_colWidths.empty()) {
-        return (float)col * m_defaultColWidth;
-    }
-    
+    const auto& state = GetActiveTab().state;
+    // Optimization: Store cached widths or sum? 
+    // For now linear sum is okay for reasonable col counts.
     for (size_t i = 0; i < col; ++i) {
-        x += GetColumnWidth(i);
+        x += state.GetColumnWidth(i); // This accesses map, acceptable.
     }
     return x;
 }
@@ -1920,21 +2046,39 @@ size_t MainWindow::GetColumnAtX(float targetX) const
 {
     if (targetX < 0) return 0;
     
-    if (m_colWidths.empty()) {
-         if (m_defaultColWidth == 0) return 0;
-         return (size_t)(targetX / m_defaultColWidth);
-    }
-    
+    // Scan
     float x = 0;
     size_t c = 0;
-    size_t maxCols = 10000; // Safety break
+    const auto& state = GetActiveTab().state;
+    // Safety cap
+    size_t maxCols = 1000; // Reasonable cap to prevent inf loops if width 0 (though min is 10)
     
     while (x <= targetX) {
-        float w = GetColumnWidth(c);
+        float w = state.GetColumnWidth(c);
         if (x + w > targetX) return c;
         x += w;
         c++;
-        if (c > maxCols) return c; 
+        if (c > maxCols) break; 
     }
     return c;
+}
+int MainWindow::HitTestTabBar(int x, int y)
+{
+    float fx = (float)x;
+    float currentX = 0;
+    float tabW = 120.0f; // Must match OnPaint
+    
+    for (size_t i = 0; i < m_tabs.size(); ++i) {
+        if (fx >= currentX && fx < currentX + tabW) {
+            return (int)i;
+        }
+        currentX += tabW;
+    }
+    
+    // Check New Tab Button
+    if (fx >= currentX && fx < currentX + 30.0f) {
+        return (int)m_tabs.size(); // Special index for new tab
+    }
+    
+    return -1;
 }

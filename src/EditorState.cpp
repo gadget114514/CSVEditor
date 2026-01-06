@@ -1,7 +1,22 @@
 #include "EditorState.h"
+#include <algorithm>
+#include <map>
 
 EditorState::EditorState()
 {
+}
+
+float EditorState::GetColumnWidth(size_t col) const {
+    auto it = m_colWidths.find(col);
+    if (it != m_colWidths.end()) {
+        return it->second;
+    }
+    return m_defaultColWidth;
+}
+
+void EditorState::SetColumnWidth(size_t col, float width) {
+    if (width < 10.0f) width = 10.0f; // Minimum width
+    m_colWidths[col] = width;
 }
 
 void EditorState::SelectCell(size_t row, size_t col, bool multiSelect)
