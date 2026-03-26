@@ -85,7 +85,7 @@ private:
     // UI Layout - Tab Bar
     float m_tabBarHeight = 25.0f;
     void DrawTabBar(HDC hdc, RECT clientRect);
-    int HitTestTabBar(int x, int y); // Returns tab index or -1
+    int HitTestTabBar(int x, int y, bool* outIsClose = nullptr); // Returns tab index or -1
 
 private:
     void UpdateScrollBars();

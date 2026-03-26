@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <commctrl.h>
 #pragma comment(lib, "comctl32.lib")
+#include <shellapi.h>
+#pragma comment(lib, "shell32.lib")
 
 MainWindow::MainWindow() : m_hwnd(NULL)
 {
@@ -161,6 +163,8 @@ bool MainWindow::Create(HINSTANCE hInstance, int nCmdShow)
     m_hCursorArrow = LoadCursor(NULL, IDC_ARROW);
     m_hCursorWE = LoadCursor(NULL, IDC_SIZEWE);
 
+    DragAcceptFiles(m_hwnd, TRUE);
+
     ShowWindow(m_hwnd, nCmdShow);
     UpdateWindow(m_hwnd);
 
@@ -314,6 +318,22 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
     case WM_MOUSEWHEEL:
         OnMouseWheel(GET_WHEEL_DELTA_WPARAM(wParam));
         return 0; 
+
+    case WM_DROPFILES:
+    {
+        HDROP hDrop = (HDROP)wParam;
+        UINT count = DragQueryFile(hDrop, 0xFFFFFFFF, NULL, 0);
+        WaitCursor wait;
+        for (UINT i = 0; i < count; ++i) {
+            UINT len = DragQueryFile(hDrop, i, NULL, 0);
+            std::wstring path(len + 1, L'\0');
+            DragQueryFile(hDrop, i, &path[0], len + 1);
+            path.resize(len);
+            OpenFile(path);
+        }
+        DragFinish(hDrop);
+        return 0;
+    }
 
     case WM_ERASEBKGND:
         return 1; // Prevent flickering
@@ -621,17 +641,19 @@ void MainWindow::OnCommand(HWND hwnd, int id, HWND hwndCtl, UINT codeNotify)
 
 void MainWindow::OnFileOpen()
 {
-    OPENFILENAME ofn;
-    TCHAR szFile[260] = {0};
+    // Large buffer to hold multiple selected file paths
+    static std::vector<TCHAR> szFile(32768, 0);
+    std::fill(szFile.begin(), szFile.end(), 0);
 
+    OPENFILENAME ofn;
     ZeroMemory(&ofn, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = m_hwnd;
-    ofn.lpstrFile = szFile;
-    ofn.nMaxFile = sizeof(szFile);
-    
+    ofn.lpstrFile = szFile.data();
+    ofn.nMaxFile = (DWORD)szFile.size();
+
     // Construct filter: "CSV Files\0*.csv\0TSV Files\0*.tsv\0All Files\0*.*\0"
-    static std::vector<TCHAR> filter; 
+    static std::vector<TCHAR> filter;
     filter.clear();
     auto append = [&](const TCHAR* s) { while(*s) filter.push_back(*s++); filter.push_back('\0'); };
     append(Localization::GetString(StringId::File_Filter_CSV)); append(_T("*.csv"));
@@ -644,14 +666,33 @@ void MainWindow::OnFileOpen()
     ofn.lpstrFileTitle = NULL;
     ofn.nMaxFileTitle = 0;
     ofn.lpstrInitialDir = NULL;
-    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_ALLOWMULTISELECT | OFN_EXPLORER;
 
     if (GetOpenFileName(&ofn) == TRUE) {
         WaitCursor wait;
-        if (OpenFile(szFile)) {
-            // Update window title or status
-            // SetWindowText(m_hwnd, szFile);
+        // With OFN_ALLOWMULTISELECT | OFN_EXPLORER:
+        //   Single file:   buffer = "C:\path\to\file.csv\0"
+        //   Multiple files: buffer = "C:\dir\0file1.csv\0file2.csv\0\0"
+        TCHAR* p = szFile.data();
+        std::wstring first = p;
+        p += first.size() + 1;
+
+        bool anyFailed = false;
+        if (*p == _T('\0')) {
+            // Single file selected
+            if (!OpenFile(first)) anyFailed = true;
         } else {
+            // Multiple files: first is the directory
+            std::wstring dir = first;
+            while (*p) {
+                std::wstring filename = p;
+                std::wstring fullPath = dir + L"\\" + filename;
+                if (!OpenFile(fullPath)) anyFailed = true;
+                p += filename.size() + 1;
+            }
+        }
+
+        if (anyFailed) {
             MessageBox(m_hwnd, Localization::GetString(StringId::Msg_OpenFailed), Localization::GetString(StringId::Msg_Error), MB_ICONERROR);
         }
     }
@@ -1165,12 +1206,15 @@ void MainWindow::OnLButtonDown(int x, int y, UINT keyFlags)
 {
     // Check Tab Bar Click
     if (y < m_tabBarHeight) {
-        int tabIndex = HitTestTabBar(x, y);
+        bool isClose = false;
+        int tabIndex = HitTestTabBar(x, y, &isClose);
         if (tabIndex != -1) {
-            if (tabIndex == m_tabs.size()) {
+            if (tabIndex == (int)m_tabs.size()) {
                 AddTab(L"", true); // New Tab
+            } else if (isClose) {
+                CloseTab((size_t)tabIndex);
             } else {
-                SetActiveTab(tabIndex);
+                SetActiveTab((size_t)tabIndex);
             }
         }
         return;
@@ -1867,23 +1911,27 @@ void MainWindow::OnPaint(HWND hwnd)
         
         // Draw Tabs
         float tabX = 0;
-        float tabW = 120.0f;
+        float tabW = 150.0f;
         float tabH = m_tabBarHeight; // 25.0f
-        
+        float closeW = 18.0f; // Width reserved for × button
+
         for (size_t i = 0; i < m_tabs.size(); ++i) {
             D2D1_RECT_F tabRect = D2D1::RectF(tabX, 0, tabX + tabW, tabH);
-            
+
             pRT->FillRectangle(tabRect, (i == m_activeTabIndex) ? pBrushTabActive : pBrushTabInactive);
             pRT->DrawRectangle(tabRect, pBrushGrid);
-            
+
+            // Title text (leave room for × button)
             std::wstring title = m_tabs[i].title;
-            D2D1_RECT_F textRect = D2D1::RectF(tabX + 5, 5, tabX + tabW - 5, tabH - 5);
-            
-            // Allow clipping
+            D2D1_RECT_F textRect = D2D1::RectF(tabX + 5, 5, tabX + tabW - closeW - 2, tabH - 5);
             pRT->PushAxisAlignedClip(textRect, D2D1_ANTIALIAS_MODE_ALIASED);
             pRT->DrawText(title.c_str(), (UINT32)title.length(), pTF, textRect, pBrushBlack);
             pRT->PopAxisAlignedClip();
-            
+
+            // × close button
+            D2D1_RECT_F closeRect = D2D1::RectF(tabX + tabW - closeW, 4, tabX + tabW - 2, tabH - 4);
+            pRT->DrawText(L"\u00D7", 1, pTF, closeRect, pBrushBlack);
+
             tabX += tabW;
         }
         
@@ -2062,23 +2110,29 @@ size_t MainWindow::GetColumnAtX(float targetX) const
     }
     return c;
 }
-int MainWindow::HitTestTabBar(int x, int y)
+int MainWindow::HitTestTabBar(int x, int y, bool* outIsClose)
 {
     float fx = (float)x;
     float currentX = 0;
-    float tabW = 120.0f; // Must match OnPaint
-    
+    float tabW = 150.0f; // Must match OnPaint
+    float closeW = 18.0f;
+
+    if (outIsClose) *outIsClose = false;
+
     for (size_t i = 0; i < m_tabs.size(); ++i) {
         if (fx >= currentX && fx < currentX + tabW) {
+            if (outIsClose && fx >= currentX + tabW - closeW) {
+                *outIsClose = true;
+            }
             return (int)i;
         }
         currentX += tabW;
     }
-    
+
     // Check New Tab Button
     if (fx >= currentX && fx < currentX + 30.0f) {
         return (int)m_tabs.size(); // Special index for new tab
     }
-    
+
     return -1;
 }
